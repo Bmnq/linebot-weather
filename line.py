@@ -5,6 +5,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import re
+import os
+import json
 
 app = Flask(__name__)
 
@@ -18,7 +20,9 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # Google Sheets 連線
 def get_sheet():
     scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+    creds_dict = json.loads(creds_json)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     sheet = client.open_by_key(SPREADSHEET_ID).sheet1
     return sheet
