@@ -1,0 +1,202 @@
+from flask import Flask, request, abort
+from linebot import LineBotApi, WebhookHandler
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+app = Flask(__name__)
+
+CHANNEL_ACCESS_TOKEN = "igBNSrbxjJkTgX4/9QEEJi0Je2Z78EPW+HWpUkIWSb8YCYteY1FZO8xifog0UvIGuubUgw6BwNp0EAo9dX35h3sSRHtpwUDu8m8yhXJgi3JsrToOBFFHxnDR3bwiOoKuIWg3y9SEI/ttZ8tAI8vAfQdB04t89/1O/w1cDnyilFU="
+CHANNEL_SECRET = "cfa032227546a79ef546710a3848dc7c"
+CWA_API_KEY = "CWA-AA66672E-215E-4D4C-BEE2-CDC8D6440F39"
+ENV_API_KEY = "b245d532-5935-468f-9d08-9756e7bb46b0"
+
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
+
+# 支援簡稱對應完整縣市名
+CITY_MAP = {
+    "台北": "臺北市", "臺北": "臺北市",
+    "新北": "新北市",
+    "桃園": "桃園市",
+    "台中": "臺中市", "臺中": "臺中市",
+    "台南": "臺南市", "臺南": "臺南市",
+    "高雄": "高雄市",
+    "基隆": "基隆市",
+    "新竹": "新竹市",
+    "苗栗": "苗栗縣",
+    "彰化": "彰化縣",
+    "南投": "南投縣",
+    "雲林": "雲林縣",
+    "嘉義": "嘉義市",
+    "屏東": "屏東縣",
+    "宜蘭": "宜蘭縣",
+    "花蓮": "花蓮縣",
+    "台東": "臺東縣", "臺東": "臺東縣",
+    "澎湖": "澎湖縣",
+    "金門": "金門縣",
+    "連江": "連江縣",
+    "馬祖": "連江縣",
+    
+    # 完整名稱也支援
+    "臺北市": "臺北市", "台北市": "臺北市",
+    "臺中市": "臺中市", "台中市": "臺中市",
+    "臺南市": "臺南市", "台南市": "臺南市",
+    "臺東縣": "臺東縣", "台東縣": "臺東縣",
+    "新北市": "新北市",
+    "桃園市": "桃園市",
+    "高雄市": "高雄市",
+    "基隆市": "基隆市",
+    "新竹市": "新竹市",
+    "新竹縣": "新竹縣",
+    "苗栗縣": "苗栗縣",
+    "彰化縣": "彰化縣",
+    "南投縣": "南投縣",
+    "雲林縣": "雲林縣",
+    "嘉義市": "嘉義市",
+    "嘉義縣": "嘉義縣",
+    "屏東縣": "屏東縣",
+    "宜蘭縣": "宜蘭縣",
+    "花蓮縣": "花蓮縣",
+    "澎湖縣": "澎湖縣",
+    "金門縣": "金門縣",
+    "連江縣": "連江縣",
+}
+
+def normalize_city(text):
+    """把使用者輸入的簡稱轉成完整縣市名"""
+    # 如果已經是完整名稱就直接回傳
+    if text in CITY_MAP.values():
+        return text
+    # 嘗試簡稱對應
+    return CITY_MAP.get(text, None)
+
+def get_clothing_advice(min_t, max_t, rh, pm25_val):
+    """根據氣溫、濕度、PM2.5 給穿衣建議"""
+    advice = []
+    avg_t = (min_t + max_t) / 2
+
+    # 穿衣建議
+    if avg_t >= 28:
+        advice.append("👕 天氣炎熱，建議穿輕薄透氣的衣物")
+    elif avg_t >= 24:
+        advice.append("👔 氣候舒適，短袖或薄長袖皆可")
+    elif avg_t >= 18:
+        advice.append("🧥 早晚涼，建議帶件薄外套")
+    elif avg_t >= 12:
+        advice.append("🧣 天氣偏涼，建議穿外套並注意保暖")
+    else:
+        advice.append("🧤 天氣寒冷，建議穿厚外套、圍巾手套")
+
+    # 濕度建議
+    if rh >= 80:
+        advice.append("💧 濕度偏高，體感悶熱，注意補水")
+    elif 0 <= rh <= 40:
+        advice.append("🏜 空氣乾燥，記得多喝水保濕")
+
+    # PM2.5 建議
+    try:
+        pm = float(pm25_val)
+        if pm >= 54:
+            advice.append("😷 空氣品質差，外出請戴口罩")
+        elif pm >= 35:
+            advice.append("⚠️ 空氣品質普通，敏感族群建議戴口罩")
+        else:
+            advice.append("✅ 空氣品質良好")
+    except:
+        pass
+
+    return "\n".join(advice)
+
+def get_pm25(city):
+    url = "https://data.moenv.gov.tw/api/v2/aqx_p_432"
+    params = {
+        "api_key": ENV_API_KEY,
+        "limit": 100,
+        "format": "JSON"
+    }
+    try:
+        res = requests.get(url, params=params, verify=False)
+        records = res.json()
+        for r in records:
+            if city in r.get("county", ""):
+                pm25_val = r.get("pm2.5", "無資料")
+                status = r.get("status", "")
+                return pm25_val, status
+        return "無資料", ""
+    except Exception as e:
+        return "查詢失敗", ""
+
+def get_weather(city):
+    # 天氣預報 F-C0032-001（縣市層級）
+    url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
+    params = {
+        "Authorization": CWA_API_KEY,
+        "locationName": city,
+        "elementName": "Wx,MinT,MaxT,PoP"
+    }
+    try:
+        res = requests.get(url, params=params, verify=False)
+        data = res.json()
+        location = data["records"]["location"][0]
+        name = location["locationName"]
+        elements = {el["elementName"]: el for el in location["weatherElement"]}
+
+        wx = elements["Wx"]["time"][0]["parameter"]["parameterName"]
+        min_t = int(elements["MinT"]["time"][0]["parameter"]["parameterName"])
+        max_t = int(elements["MaxT"]["time"][0]["parameter"]["parameterName"])
+        pop = elements["PoP"]["time"][0]["parameter"]["parameterName"]
+
+    except Exception as e:
+        return f"錯誤：{e}"
+
+    # PM2.5
+    pm25_val, pm_status = get_pm25(city)
+
+    # 穿衣建議（濕度帶 -1 表示無資料，跳過濕度建議）
+    advice = get_clothing_advice(min_t, max_t, -1, pm25_val)
+
+    if pm25_val not in ("無資料", "查詢失敗"):
+        pm_display = f"{pm25_val} μg/m³（{pm_status}）"
+    else:
+        pm_display = pm25_val
+
+    return (
+        f"📍 {name} 天氣資訊\n"
+        f"━━━━━━━━━━━━\n"
+        f"🌤 天氣：{wx}\n"
+        f"🌡 氣溫：{min_t}°C ~ {max_t}°C\n"
+        f"🌂 降雨機率：{pop}%\n"
+        f"💨 PM2.5：{pm_display}\n"
+        f"━━━━━━━━━━━━\n"
+        f"{advice}"
+    )
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
+    handler.handle(body, signature)
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    msg = event.message.text.strip()
+
+    # 直接輸入城市名稱就查天氣（不需要加「天氣」）
+    city = msg.replace("天氣", "").strip()
+    normalized = normalize_city(city)
+
+    if normalized:
+        reply = get_weather(normalized)
+    else:
+        reply = "請輸入縣市名稱來查詢天氣 🌤\n例如：桃園、台北、高雄、台中"
+
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply)
+    )
+
+if __name__ == "__main__":
+    app.run(port=5000)
